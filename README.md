@@ -12,13 +12,13 @@ This Streamlit application predicts customer churn probability based on service 
 
 ## Live Demo
 
-[View the live app on Streamlit Cloud](https://your-app-name.streamlit.app)
+[View the live app on Streamlit Cloud](https://omaraymanmohamed-customer-churn-prediction-app-xxxxx.streamlit.app)
 
 ## Local Setup
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/your-username/customer-churn-prediction.git
+git clone https://github.com/OmarAymanMohamed/customer-churn-prediction.git
 cd customer-churn-prediction
 ```
 

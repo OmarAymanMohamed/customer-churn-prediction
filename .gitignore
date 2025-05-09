@@ -28,8 +28,7 @@ processed_data/
 *.xlsx
 *.xls
 
-# Model artifacts
-model_artifacts/
+# Logs
 logs/
 prediction_logs/
 
