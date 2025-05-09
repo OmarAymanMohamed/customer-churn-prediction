@@ -115,11 +115,16 @@ def predict_churn(customer_data):
         df = pd.DataFrame([customer_data])
         df = create_engineered_features(df)
         
-        numerical_features = [
+        # Original numerical features used by the trained model
+        original_numerical_features = [
             'TenureMonths', 'MonthlyCharges', 'TotalCharges',
             'AvgMonthlyCharges', 'TenureYears', 'ChargesPerYear',
             'ServiceCount', 'ContractRiskScore', 'PaymentRiskScore',
-            'MonthlyChargesPerService', 'TotalChargesPerService',
+            'MonthlyChargesPerService', 'TotalChargesPerService'
+        ]
+        
+        # New features for enhanced prediction (not used by the base model)
+        enhanced_features = [
             'IsNewCustomer', 'HasOnlineProtection', 'HasTechSupport',
             'HasStreamingService', 'IsFiberOptic', 'IsMonthToMonth',
             'IsElectronicCheck', 'MonthToMonth_FiberOptic',
@@ -129,16 +134,10 @@ def predict_churn(customer_data):
         
         # Apply power transform if available
         if use_power_transform:
-            original_numerical_features = [
-                'TenureMonths', 'MonthlyCharges', 'TotalCharges',
-                'AvgMonthlyCharges', 'TenureYears', 'ChargesPerYear',
-                'ServiceCount', 'ContractRiskScore', 'PaymentRiskScore',
-                'MonthlyChargesPerService', 'TotalChargesPerService'
-            ]
             df[original_numerical_features] = power_transformer.transform(df[original_numerical_features])
         
-        # Scale numerical features
-        df[numerical_features] = scaler.transform(df[numerical_features])
+        # Scale original numerical features
+        df[original_numerical_features] = scaler.transform(df[original_numerical_features])
         
         # Load feature names
         with open(MODEL_PATHS['best_model'].parent / "feature_names.txt", 'r') as f:
@@ -146,8 +145,8 @@ def predict_churn(customer_data):
         
         encoded_features = pd.DataFrame(0, index=df.index, columns=feature_names)
         
-        # Set numerical features
-        for feature in numerical_features:
+        # Set original numerical features
+        for feature in original_numerical_features:
             if feature in df.columns and feature in feature_names:
                 encoded_features[feature] = df[feature]
         
@@ -184,47 +183,70 @@ def predict_churn(customer_data):
                         encoded_features[col] = 1
                         break
         
-        # Create a random forest model as a supplementary model
-        rf_model = RandomForestClassifier(
-            n_estimators=200,
-            max_depth=12,
-            min_samples_split=5,
-            min_samples_leaf=2,
-            class_weight='balanced',
-            random_state=42
-        )
-        
-        # Train the random forest on the same encoded features using a rule-based approach
-        X_synth = encoded_features.copy()
-        y_synth = pd.Series([0, 1])  # Placeholder, will be filled by rules
-        
-        # Rule-based training data
-        is_month_to_month = 'Contract_Month-to-month' in encoded_features and encoded_features['Contract_Month-to-month'].iloc[0] == 1
-        is_electronic_check = 'PaymentMethod_Electronic check' in encoded_features and encoded_features['PaymentMethod_Electronic check'].iloc[0] == 1
-        is_fiber = 'InternetService_Fiber optic' in encoded_features and encoded_features['InternetService_Fiber optic'].iloc[0] == 1
-        has_online_security = 'OnlineSecurity_Yes' in encoded_features and encoded_features['OnlineSecurity_Yes'].iloc[0] == 1
-        low_tenure = 'TenureMonths' in encoded_features and df['TenureMonths'].iloc[0] < 24
-        
-        # Rule-based prediction logic (synthetic training)
-        rule_based_prob = 0.05  # Base probability
-        
-        if is_month_to_month:
-            rule_based_prob += 0.3
-        if is_electronic_check:
-            rule_based_prob += 0.2
-        if is_fiber and not has_online_security:
-            rule_based_prob += 0.25
-        if low_tenure:
-            rule_based_prob += 0.15
-        
-        # Cap at 0.95
-        rule_based_prob = min(0.95, rule_based_prob)
-        
         # Make prediction with main model
         main_prob = main_model.predict_proba(encoded_features)[0][1]
         
-        # Ensemble the predictions (weighted average)
-        raw_probability = 0.7 * main_prob + 0.3 * rule_based_prob
+        # Rule-based prediction logic (expert system)
+        rule_based_prob = 0.05  # Base probability
+        
+        # Extract key features
+        is_month_to_month = df['Contract'].iloc[0] == 'Month-to-month'
+        is_electronic_check = df['PaymentMethod'].iloc[0] == 'Electronic check'
+        is_fiber = df['InternetService'].iloc[0] == 'Fiber optic'
+        has_online_security = df['OnlineSecurity'].iloc[0] == 'Yes'
+        has_tech_support = df['TechSupport'].iloc[0] == 'Yes'
+        low_tenure = df['TenureMonths'].iloc[0] < 24
+        very_low_tenure = df['TenureMonths'].iloc[0] <= 6
+        high_monthly_charges = df['MonthlyCharges'].iloc[0] > 70
+        is_two_year = df['Contract'].iloc[0] == 'Two year'
+        auto_payment = df['PaymentMethod'].iloc[0] in ['Bank transfer (automatic)', 'Credit card (automatic)']
+        has_family = df['Partner'].iloc[0] == 'Yes' and df['Dependents'].iloc[0] == 'Yes'
+        very_high_tenure = df['TenureMonths'].iloc[0] >= 60
+        
+        # High-risk combinations
+        fiber_no_protection = is_fiber and not has_online_security
+        new_customer_expensive = very_low_tenure and high_monthly_charges
+        month_to_month_electronic = is_month_to_month and is_electronic_check
+        
+        # Apply rules with confidence-based weighting
+        if is_month_to_month:
+            rule_based_prob += 0.35
+        if is_electronic_check:
+            rule_based_prob += 0.25
+        if fiber_no_protection:
+            rule_based_prob += 0.40
+        if low_tenure:
+            rule_based_prob += 0.20
+        if very_low_tenure:
+            rule_based_prob += 0.15
+        if high_monthly_charges and low_tenure:
+            rule_based_prob += 0.20
+        if month_to_month_electronic:
+            rule_based_prob += 0.15
+            
+        # Low-risk combinations (protective factors)
+        if is_two_year and auto_payment:
+            rule_based_prob -= 0.35
+        if has_family and very_high_tenure:
+            rule_based_prob -= 0.30
+        if has_tech_support and has_online_security and is_two_year:
+            rule_based_prob -= 0.25
+        if very_high_tenure and auto_payment:
+            rule_based_prob -= 0.20
+            
+        # Cap between 0.05 and 0.95
+        rule_based_prob = max(0.05, min(0.95, rule_based_prob))
+        
+        # Enhanced weighting for critical cases
+        if fiber_no_protection and is_month_to_month:
+            # High confidence case - stronger weight for rules
+            raw_probability = 0.40 * main_prob + 0.60 * rule_based_prob
+        elif is_two_year and has_tech_support and very_high_tenure:
+            # High confidence case - stronger weight for rules
+            raw_probability = 0.35 * main_prob + 0.65 * rule_based_prob
+        else:
+            # Normal case - balanced weighting
+            raw_probability = 0.50 * main_prob + 0.50 * rule_based_prob
         
         # Adjust probability based on risk factors
         risk_factors = []
@@ -233,17 +255,17 @@ def predict_churn(customer_data):
         # Contract risk
         if customer_data['Contract'] == 'Month-to-month':
             risk_factors.append("Month-to-month contract (high risk)")
-            risk_multiplier *= 2.5
+            risk_multiplier *= 3.0
         
         # Payment method risk
         if customer_data['PaymentMethod'] == 'Electronic check':
             risk_factors.append("Electronic check payment (high risk)")
-            risk_multiplier *= 2.0
+            risk_multiplier *= 2.5
         
         # Tenure risk
         if customer_data['TenureMonths'] < 24:
             risk_factors.append("Low tenure (< 24 months)")
-            risk_multiplier *= 1.8
+            risk_multiplier *= 2.0
         
         # Service usage risk
         service_count = sum(1 for service in ['OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport'] 
@@ -270,18 +292,35 @@ def predict_churn(customer_data):
         # Fiber optic without protection
         if customer_data['InternetService'] == 'Fiber optic' and customer_data['OnlineSecurity'] == 'No':
             risk_factors.append("Fiber optic without security (very high risk)")
-            risk_multiplier *= 1.7
+            risk_multiplier *= 2.0
             
         # New customer with high charges
         if customer_data['TenureMonths'] < 12 and customer_data['MonthlyCharges'] > 70:
             risk_factors.append("New customer with high charges (price shock risk)")
-            risk_multiplier *= 1.6
+            risk_multiplier *= 1.8
         
+        # Protective factors - reduce multiplier
+        if customer_data['Contract'] == 'Two year':
+            risk_factors.append("Two-year contract (protective factor)")
+            risk_multiplier *= 0.3
+            
+        if customer_data['TenureMonths'] >= 60:
+            risk_factors.append("Long-term customer (protective factor)")
+            risk_multiplier *= 0.4
+            
+        if customer_data['PaymentMethod'] in ['Bank transfer (automatic)', 'Credit card (automatic)']:
+            risk_factors.append("Automatic payment method (protective factor)")
+            risk_multiplier *= 0.6
+            
+        if customer_data['Partner'] == 'Yes' and customer_data['Dependents'] == 'Yes':
+            risk_factors.append("Family customer (protective factor)")
+            risk_multiplier *= 0.7
+            
         # Apply risk adjustment with a minimum base probability and boost with advanced analytics
         base_probability = max(0.15, raw_probability)
         
         # Boosted model accuracy
-        advanced_analytics_multiplier = 1.2  # Boost for advanced analytics
+        advanced_analytics_multiplier = 1.25  # Boost for advanced analytics
         
         # Apply advanced analytics multiplier only when prediction confidence is high
         confidence_high = abs(raw_probability - 0.5) > 0.3
@@ -289,6 +328,14 @@ def predict_churn(customer_data):
             adjusted_probability = min(0.95, base_probability * risk_multiplier * advanced_analytics_multiplier)
         else:
             adjusted_probability = min(0.95, base_probability * risk_multiplier)
+        
+        # Hard cutoffs for very clear cases
+        if is_month_to_month and is_fiber and not has_online_security and very_low_tenure and is_electronic_check:
+            # Definite churn case
+            adjusted_probability = 0.95
+        elif is_two_year and very_high_tenure and has_tech_support and has_online_security and has_family and auto_payment:
+            # Definite stay case
+            adjusted_probability = 0.10
         
         # Determine churn prediction based on adjusted probability
         will_churn = adjusted_probability > 0.3
